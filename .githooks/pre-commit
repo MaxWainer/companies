@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if git diff --cached --name-only --diff-filter=ACMR | grep -qE '\.go$|^go\.(mod|sum)$|^\.golangci\.yml$'; then
+	echo "pre-commit: golangci-lint"
+	make --no-print-directory lint
+fi

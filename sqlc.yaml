@@ -1,0 +1,19 @@
+version: "2"
+sql:
+  - engine: postgresql
+    schema: internal/platform/postgres/migrations
+    queries: internal/company/repository/queries.sql
+    gen:
+      go:
+        package: companydb
+        out: internal/company/repository/companydb
+        sql_package: pgx/v5
+        emit_pointers_for_null_types: true
+        emit_result_struct_pointers: false
+        overrides:
+          - db_type: uuid
+            go_type: github.com/google/uuid.UUID
+          - db_type: timestamptz
+            go_type: time.Time
+          - column: companies.amount_of_employees
+            go_type: int

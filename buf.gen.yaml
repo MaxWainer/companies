@@ -1,0 +1,6 @@
+version: v2
+clean: true
+plugins:
+  - local: ["go", "tool", "protoc-gen-go"]
+    out: internal/event/eventpb
+    opt: module=example.com/companies/internal/event/eventpb

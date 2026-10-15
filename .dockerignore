@@ -1,0 +1,8 @@
+.git
+.github
+.env
+bin
+coverage.*
+deploy
+docker-compose.yml
+*.md

@@ -1,0 +1,98 @@
+# Example deployment showing how the probes are meant to be used.
+#
+#   startupProbe   /startupz  first round of checks done (migrations ran before listening)
+#   livenessProbe  /livez     the process answers; never depends on PostgreSQL or
+#                             Kafka, so a dependency outage does not restart
+#                             every replica
+#   readinessProbe /readyz    PostgreSQL reachable and not shutting down; an
+#                             unreachable Kafka only degrades it, because reads
+#                             still work
+#
+# On SIGTERM /readyz fails at once; COMPANIES_HTTP_SHUTDOWN_DELAY keeps serving
+# while endpoints are updated, then requests drain within
+# COMPANIES_HTTP_SHUTDOWN_TIMEOUT. terminationGracePeriodSeconds covers both.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: companies
+  labels: { app.kubernetes.io/name: companies }
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app.kubernetes.io/name: companies }
+  strategy:
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: companies }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: /metrics
+    spec:
+      terminationGracePeriodSeconds: 40
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: companies
+          image: companies-service:1.0.0
+          args: ["serve"]
+          ports:
+            - { name: http, containerPort: 8080 }
+          env:
+            - { name: COMPANIES_DATABASE_MIGRATE_ON_START, value: "false" } # run `companies migrate` as a Job
+            - { name: COMPANIES_HTTP_SHUTDOWN_DELAY, value: "5s" }
+            - { name: COMPANIES_HTTP_DOCS_ENABLED, value: "false" } # no public API docs in production
+            - { name: GOMEMLIMIT, value: "230MiB" } # ~90% of limits.memory: GC works harder before the OOM killer does
+            - { name: COMPANIES_HTTP_SHUTDOWN_TIMEOUT, value: "25s" }
+            - { name: COMPANIES_KAFKA_BROKERS, value: "kafka-0.kafka:9092,kafka-1.kafka:9092,kafka-2.kafka:9092" }
+            - { name: COMPANIES_TELEMETRY_ENABLED, value: "true" }
+            - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://otel-collector.observability:4318" }
+            - { name: OTEL_TRACES_SAMPLER, value: parentbased_traceidratio }
+            - { name: OTEL_TRACES_SAMPLER_ARG, value: "0.1" }
+            - name: COMPANIES_DATABASE_DSN
+              valueFrom: { secretKeyRef: { name: companies, key: database-dsn } }
+            - { name: COMPANIES_AUTH_ISSUER, value: "https://auth.example.com" }
+            - { name: COMPANIES_AUTH_AUDIENCE, value: "companies-service" }
+            - name: COMPANIES_AUTH_JWT_SECRET
+              valueFrom: { secretKeyRef: { name: companies, key: jwt-secret } }
+          startupProbe:
+            httpGet: { path: /startupz, port: http }
+            periodSeconds: 2
+            failureThreshold: 30 # up to 60s to start
+          livenessProbe:
+            httpGet: { path: /livez, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          resources:
+            requests: { cpu: 100m, memory: 64Mi }
+            limits: { cpu: "2", memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: companies
+spec:
+  selector: { app.kubernetes.io/name: companies }
+  ports:
+    - { name: http, port: 80, targetPort: http }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: companies
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels: { app.kubernetes.io/name: companies }

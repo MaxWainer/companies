@@ -1,0 +1,574 @@
+basePath: /
+definitions:
+  Company:
+    properties:
+      amount_of_employees:
+        type: integer
+      created_at:
+        type: string
+      description:
+        type: string
+      id:
+        type: string
+      name:
+        type: string
+      registered:
+        type: boolean
+      type:
+        $ref: '#/definitions/CompanyType'
+      updated_at:
+        type: string
+    type: object
+  CompanyType:
+    enum:
+    - CORPORATIONS
+    - NON_PROFIT
+    - COOPERATIVE
+    - SOLE_PROPRIETORSHIP
+    type: string
+    x-enum-varnames:
+    - TypeCorporations
+    - TypeNonProfit
+    - TypeCooperative
+    - TypeSoleProprietorship
+  ConflictError:
+    properties:
+      error:
+        properties:
+          code:
+            example: conflict
+            type: string
+          fields:
+            additionalProperties:
+              type: string
+            example:
+              name: is already taken
+            type: object
+          message:
+            example: company name is already taken
+            type: string
+          request_id:
+            example: 6f1c2a52-3b0e-4b8e-9d3a-2f4c8e1d7a90
+            type: string
+        type: object
+    type: object
+  CreateCompanyRequest:
+    properties:
+      amount_of_employees:
+        example: 42
+        maximum: 2147483647
+        minimum: 0
+        type: integer
+      description:
+        example: Makes everything
+        maxLength: 3000
+        type: string
+        x-nullable: true
+      name:
+        example: Acme
+        maxLength: 15
+        minLength: 1
+        type: string
+      registered:
+        example: true
+        type: boolean
+      type:
+        allOf:
+        - $ref: '#/definitions/CompanyType'
+        enum:
+        - CORPORATIONS
+        - NON_PROFIT
+        - COOPERATIVE
+        - SOLE_PROPRIETORSHIP
+        example: CORPORATIONS
+    type: object
+  HealthCheckResult:
+    properties:
+      checked_at:
+        type: string
+      critical:
+        type: boolean
+      details:
+        additionalProperties:
+          type: string
+        type: object
+      duration_ms:
+        type: number
+      error:
+        type: string
+      status:
+        $ref: '#/definitions/HealthStatus'
+    type: object
+  HealthReport:
+    properties:
+      checks:
+        additionalProperties:
+          $ref: '#/definitions/HealthCheckResult'
+        type: object
+      status:
+        $ref: '#/definitions/HealthStatus'
+    type: object
+  HealthStatus:
+    enum:
+    - up
+    - degraded
+    - down
+    type: string
+    x-enum-varnames:
+    - StatusUp
+    - StatusDegraded
+    - StatusDown
+  InternalError:
+    properties:
+      error:
+        properties:
+          code:
+            example: internal_error
+            type: string
+          message:
+            example: internal server error
+            type: string
+          request_id:
+            example: 6f1c2a52-3b0e-4b8e-9d3a-2f4c8e1d7a90
+            type: string
+        type: object
+    type: object
+  InvalidIDError:
+    properties:
+      error:
+        properties:
+          code:
+            example: validation_failed
+            type: string
+          fields:
+            additionalProperties:
+              type: string
+            example:
+              id: must be a valid UUID
+            type: object
+          message:
+            example: request validation failed
+            type: string
+          request_id:
+            example: 6f1c2a52-3b0e-4b8e-9d3a-2f4c8e1d7a90
+            type: string
+        type: object
+    type: object
+  NotFoundError:
+    properties:
+      error:
+        properties:
+          code:
+            example: not_found
+            type: string
+          message:
+            example: company not found
+            type: string
+          request_id:
+            example: 6f1c2a52-3b0e-4b8e-9d3a-2f4c8e1d7a90
+            type: string
+        type: object
+    type: object
+  PatchCompanyRequest:
+    properties:
+      amount_of_employees:
+        example: 50
+        minimum: 0
+        type: integer
+      description:
+        maxLength: 3000
+        type: string
+        x-nullable: true
+      name:
+        example: Acme Group
+        maxLength: 15
+        type: string
+      registered:
+        type: boolean
+      type:
+        enum:
+        - CORPORATIONS
+        - NON_PROFIT
+        - COOPERATIVE
+        - SOLE_PROPRIETORSHIP
+        type: string
+    type: object
+  PayloadTooLargeError:
+    properties:
+      error:
+        properties:
+          code:
+            example: payload_too_large
+            type: string
+          message:
+            example: request body must not exceed 65536 bytes
+            type: string
+          request_id:
+            example: 6f1c2a52-3b0e-4b8e-9d3a-2f4c8e1d7a90
+            type: string
+        type: object
+    type: object
+  ServiceUnavailableError:
+    properties:
+      error:
+        properties:
+          code:
+            enum:
+            - service_unavailable
+            - timeout
+            example: service_unavailable
+            type: string
+          message:
+            example: the change was not saved because its event could not be published;
+              retry later
+            type: string
+          request_id:
+            example: 6f1c2a52-3b0e-4b8e-9d3a-2f4c8e1d7a90
+            type: string
+        type: object
+    type: object
+  TimeoutError:
+    properties:
+      error:
+        properties:
+          code:
+            example: timeout
+            type: string
+          message:
+            example: request timed out; retry later
+            type: string
+          request_id:
+            example: 6f1c2a52-3b0e-4b8e-9d3a-2f4c8e1d7a90
+            type: string
+        type: object
+    type: object
+  UnauthorizedError:
+    properties:
+      error:
+        properties:
+          code:
+            example: unauthorized
+            type: string
+          message:
+            enum:
+            - missing bearer token
+            - invalid or expired token
+            example: missing bearer token
+            type: string
+          request_id:
+            example: 6f1c2a52-3b0e-4b8e-9d3a-2f4c8e1d7a90
+            type: string
+        type: object
+    type: object
+  UnsupportedMediaTypeError:
+    properties:
+      error:
+        properties:
+          code:
+            example: unsupported_media_type
+            type: string
+          message:
+            example: Content-Type must be application/json
+            type: string
+          request_id:
+            example: 6f1c2a52-3b0e-4b8e-9d3a-2f4c8e1d7a90
+            type: string
+        type: object
+    type: object
+  ValidationFailedError:
+    properties:
+      error:
+        properties:
+          code:
+            enum:
+            - validation_failed
+            - bad_request
+            example: validation_failed
+            type: string
+          fields:
+            additionalProperties:
+              type: string
+            example:
+              amount_of_employees: is required
+              name: must be at most 15 characters
+            type: object
+          message:
+            example: request validation failed
+            type: string
+          request_id:
+            example: 6f1c2a52-3b0e-4b8e-9d3a-2f4c8e1d7a90
+            type: string
+        type: object
+    type: object
+info:
+  contact: {}
+  description: |-
+    CRUD for companies. Reads are public; create, patch and delete need a bearer JWT (HS256).
+    Every mutation publishes an event to Kafka (companies.events.v1; refused events go to companies.events.v1.dlq).
+  title: Companies service API
+  version: "1.0"
+paths:
+  /healthz:
+    get:
+      description: The process answers; never depends on PostgreSQL or Kafka.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/HealthReport'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/HealthReport'
+      summary: Liveness probe
+      tags:
+      - operations
+  /livez:
+    get:
+      description: The process answers; never depends on PostgreSQL or Kafka.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/HealthReport'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/HealthReport'
+      summary: Liveness probe
+      tags:
+      - operations
+  /readyz:
+    get:
+      description: 503 when PostgreSQL is unreachable or the server is shutting down;
+        an unreachable Kafka only makes it "degraded" (still 200). Check errors and
+        details are returned only with a valid bearer token.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/HealthReport'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/HealthReport'
+      summary: Readiness probe
+      tags:
+      - operations
+  /startupz:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/HealthReport'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/HealthReport'
+      summary: Startup probe (first round of checks completed)
+      tags:
+      - operations
+  /v1/companies:
+    post:
+      consumes:
+      - application/json
+      parameters:
+      - description: New company
+        in: body
+        name: company
+        required: true
+        schema:
+          $ref: '#/definitions/CreateCompanyRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created; Location header points at it
+          schema:
+            $ref: '#/definitions/Company'
+        "400":
+          description: Malformed body (bad_request) or invalid fields (validation_failed)
+          schema:
+            $ref: '#/definitions/ValidationFailedError'
+        "401":
+          description: Missing, invalid or expired token
+          schema:
+            $ref: '#/definitions/UnauthorizedError'
+        "409":
+          description: Name already taken (case-insensitive)
+          schema:
+            $ref: '#/definitions/ConflictError'
+        "413":
+          description: Body too large
+          schema:
+            $ref: '#/definitions/PayloadTooLargeError'
+        "415":
+          description: Content-Type is not application/json
+          schema:
+            $ref: '#/definitions/UnsupportedMediaTypeError'
+        "500":
+          description: Unexpected failure
+          schema:
+            $ref: '#/definitions/InternalError'
+        "503":
+          description: Event broker unavailable (service_unavailable) or request timed
+            out (timeout); nothing was saved
+          schema:
+            $ref: '#/definitions/ServiceUnavailableError'
+      security:
+      - BearerAuth: []
+      summary: Create a company
+      tags:
+      - companies
+  /v1/companies/{id}:
+    delete:
+      parameters:
+      - description: Company id
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Invalid id
+          schema:
+            $ref: '#/definitions/InvalidIDError'
+        "401":
+          description: Missing, invalid or expired token
+          schema:
+            $ref: '#/definitions/UnauthorizedError'
+        "404":
+          description: Not found
+          schema:
+            $ref: '#/definitions/NotFoundError'
+        "500":
+          description: Unexpected failure
+          schema:
+            $ref: '#/definitions/InternalError'
+        "503":
+          description: Event broker unavailable (service_unavailable) or request timed
+            out (timeout); nothing was saved
+          schema:
+            $ref: '#/definitions/ServiceUnavailableError'
+      security:
+      - BearerAuth: []
+      summary: Delete a company
+      tags:
+      - companies
+    get:
+      parameters:
+      - description: Company id
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/Company'
+        "400":
+          description: Invalid id
+          schema:
+            $ref: '#/definitions/InvalidIDError'
+        "404":
+          description: Not found
+          schema:
+            $ref: '#/definitions/NotFoundError'
+        "500":
+          description: Unexpected failure
+          schema:
+            $ref: '#/definitions/InternalError'
+        "503":
+          description: Request timed out
+          schema:
+            $ref: '#/definitions/TimeoutError'
+      summary: Get a company
+      tags:
+      - companies
+    patch:
+      consumes:
+      - application/json
+      - application/merge-patch+json
+      description: 'JSON Merge Patch: only sent members change; "description": null
+        clears it; null is rejected for required attributes.'
+      parameters:
+      - description: Company id
+        format: uuid
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Members to change
+        in: body
+        name: patch
+        required: true
+        schema:
+          $ref: '#/definitions/PatchCompanyRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/Company'
+        "400":
+          description: Malformed body (bad_request) or invalid id/fields (validation_failed)
+          schema:
+            $ref: '#/definitions/ValidationFailedError'
+        "401":
+          description: Missing, invalid or expired token
+          schema:
+            $ref: '#/definitions/UnauthorizedError'
+        "404":
+          description: Not found
+          schema:
+            $ref: '#/definitions/NotFoundError'
+        "409":
+          description: Name already taken
+          schema:
+            $ref: '#/definitions/ConflictError'
+        "413":
+          description: Body too large
+          schema:
+            $ref: '#/definitions/PayloadTooLargeError'
+        "415":
+          description: Content-Type is not JSON or merge-patch JSON
+          schema:
+            $ref: '#/definitions/UnsupportedMediaTypeError'
+        "500":
+          description: Unexpected failure
+          schema:
+            $ref: '#/definitions/InternalError'
+        "503":
+          description: Event broker unavailable (service_unavailable) or request timed
+            out (timeout); nothing was saved
+          schema:
+            $ref: '#/definitions/ServiceUnavailableError'
+      security:
+      - BearerAuth: []
+      summary: Partially update a company
+      tags:
+      - companies
+securityDefinitions:
+  BearerAuth:
+    description: Enter "Bearer " followed by the JWT (make token).
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

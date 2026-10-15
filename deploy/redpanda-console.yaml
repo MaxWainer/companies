@@ -1,0 +1,21 @@
+kafka:
+  brokers: ["redpanda:9092"]
+schemaRegistry:
+  enabled: true
+  urls: ["http://redpanda:8081"]
+redpanda:
+  adminApi:
+    enabled: true
+    urls: ["http://redpanda:9644"]
+serde:
+  protobuf:
+    enabled: true
+    mappings:
+      - topicName: companies.events.v1
+        valueProtoType: companies.events.v1.CompanyEvent
+      - topicName: companies.events.v1.dlq
+        valueProtoType: companies.events.v1.CompanyEvent
+    fileSystem:
+      enabled: true
+      refreshInterval: 1m
+      paths: ["/etc/protos"]

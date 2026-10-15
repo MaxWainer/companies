@@ -1,0 +1,15 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "companies",
+      "Group": "Servers",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "companies",
+      "Username": "companies",
+      "SSLMode": "disable",
+      "PassFile": "/tmp/pgpass",
+      "Comment": "docker-compose database of the companies service"
+    }
+  }
+}

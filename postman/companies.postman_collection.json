@@ -1,0 +1,1762 @@
+{
+  "info": {
+    "_postman_id": "ce5f8d7d-9c58-5ac6-9ed0-b2ad989cc893",
+    "name": "Companies service",
+    "description": "Walkthrough of the companies API.\n\n1. Start the stack: `make start` (it also writes `postman/local.postman_environment.json` with the actual ports and the JWT secret).\n2. Import this collection and that environment, select the environment.\n3. Run the whole collection with the Runner, or click through the folders in order.\n\nTokens are minted automatically from `jwtSecret` by the collection pre-request script. Every request has tests; folder 5 links to the request's trace, logs and event.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "{",
+          "    // Mints HS256 JWTs from the environment's jwtSecret, so no token has to be",
+          "    // pasted by hand. Also prepares a forged and an expired token for the auth",
+          "    // checks. Tokens are cached until a minute before they expire.",
+          "    const CryptoJS = require('crypto-js');",
+          "    const b64url = (words) => CryptoJS.enc.Base64.stringify(words).replace(/=+$/, '').replace(/\\+/g, '-').replace(/\\//g, '_');",
+          "    const json64 = (obj) => b64url(CryptoJS.enc.Utf8.parse(JSON.stringify(obj)));",
+          "    const sign = (claims, secret) => {",
+          "        const unsigned = json64({ alg: 'HS256', typ: 'JWT' }) + '.' + json64(claims);",
+          "        return unsigned + '.' + b64url(CryptoJS.HmacSHA256(unsigned, secret));",
+          "    };",
+          "",
+          "    const secret = pm.environment.get('jwtSecret') || pm.collectionVariables.get('jwtSecret');",
+          "    if (!secret) {",
+          "        throw new Error('Set jwtSecret in the environment (COMPANIES_AUTH_JWT_SECRET of the service).');",
+          "    }",
+          "    const now = Math.floor(Date.now() / 1000);",
+          "    const claims = (sub, exp) => {",
+          "        const c = { sub: sub, iat: now, nbf: now, exp: exp };",
+          "        const iss = pm.environment.get('jwtIssuer');",
+          "        const aud = pm.environment.get('jwtAudience');",
+          "        if (iss) { c.iss = iss; }",
+          "        if (aud) { c.aud = aud; }",
+          "        return c;",
+          "    };",
+          "",
+          "    const cachedExp = Number(pm.collectionVariables.get('tokenExp') || 0);",
+          "    if (!pm.collectionVariables.get('token') || cachedExp - now < 60) {",
+          "        const subject = pm.environment.get('subject') || 'postman';",
+          "        pm.collectionVariables.set('token', sign(claims(subject, now + 3600), secret));",
+          "        pm.collectionVariables.set('tokenExp', String(now + 3600));",
+          "    }",
+          "    pm.collectionVariables.set('expiredToken', sign(Object.assign(claims('postman', now - 3600), { iat: now - 7200, nbf: now - 7200 }), secret));",
+          "    pm.collectionVariables.set('forgedToken', sign(claims('mallory', now + 3600), 'not-the-service-secret-0123456789abcdef'));",
+          "}"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "{",
+          "    // Every response carries a request id; errors use one envelope.",
+          "    pm.test('X-Request-ID is returned', () => pm.response.to.have.header('X-Request-ID'));",
+          "    if (pm.response.code >= 400 && pm.response.headers.get('Content-Type') === 'application/json') {",
+          "        pm.test('error envelope is well-formed', () => {",
+          "            const e = pm.response.json().error;",
+          "            pm.expect(e).to.be.an('object');",
+          "            pm.expect(e.code).to.be.a('string');",
+          "            pm.expect(e.message).to.be.a('string');",
+          "            pm.expect(e.request_id).to.eql(pm.response.headers.get('X-Request-ID'));",
+          "        });",
+          "    }",
+          "}"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "tokenExp",
+      "value": ""
+    },
+    {
+      "key": "expiredToken",
+      "value": ""
+    },
+    {
+      "key": "forgedToken",
+      "value": ""
+    },
+    {
+      "key": "companyName",
+      "value": ""
+    },
+    {
+      "key": "companyId",
+      "value": ""
+    },
+    {
+      "key": "createdAt",
+      "value": ""
+    },
+    {
+      "key": "updatedAt",
+      "value": ""
+    },
+    {
+      "key": "longDescription",
+      "value": ""
+    },
+    {
+      "key": "upperName",
+      "value": ""
+    },
+    {
+      "key": "otherName",
+      "value": ""
+    },
+    {
+      "key": "conflictId",
+      "value": ""
+    },
+    {
+      "key": "traceId",
+      "value": ""
+    },
+    {
+      "key": "requestId",
+      "value": ""
+    },
+    {
+      "key": "observedCompanyId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "0. Health",
+      "description": "Probes for orchestrators. Checks run in the background every few seconds and the probes return the latest report. Liveness never depends on PostgreSQL or Kafka. Readiness fails only when PostgreSQL (critical) is down or the server is shutting down; an unreachable Kafka only makes it 'degraded', which still answers 200. Without a token the report has statuses only; the readiness request sends the collection token, so it also gets errors, durations and details.",
+      "item": [
+        {
+          "name": "Liveness /livez",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/livez",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "livez"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('alive', () => pm.response.to.have.status(200));",
+                  "    const r = pm.response.json();",
+                  "    pm.test('up, and checks nothing external', () => {",
+                  "        pm.expect(r.status).to.eql('up');",
+                  "        pm.expect(r.checks || {}).to.be.empty;",
+                  "    });",
+                  "    pm.test('never cached', () => pm.expect(pm.response.headers.get('Cache-Control')).to.eql('no-store'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Readiness /readyz (with token: full details)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/readyz",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "readyz"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('ready', () => pm.response.to.have.status(200));",
+                  "    const r = pm.response.json();",
+                  "    pm.test('overall status is up or degraded', () => pm.expect(['up', 'degraded']).to.include(r.status));",
+                  "    pm.test('postgres is the only critical dependency', () => {",
+                  "        pm.expect(r.checks.postgres.critical).to.eql(true);",
+                  "        pm.expect(r.checks.kafka.critical).to.eql(false);",
+                  "    });",
+                  "    pm.test('each check reports status, timing and details', () => {",
+                  "        Object.values(r.checks).forEach((c) => {",
+                  "            pm.expect(c.status).to.be.oneOf(['up', 'degraded', 'down']);",
+                  "            pm.expect(c.duration_ms).to.be.a('number');",
+                  "            pm.expect(c.checked_at).to.be.a('string');",
+                  "        });",
+                  "        pm.expect(r.checks.postgres.details).to.have.property('max_conns');",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Startup /startupz",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/startupz",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "startupz"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('started', () => { pm.response.to.have.status(200); pm.expect(pm.response.json().status).to.eql('up'); });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Swagger UI /docs/index.html",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/docs/index.html",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "docs",
+                "index.html"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('Swagger UI page', () => {",
+                  "        pm.response.to.have.status(200);",
+                  "        pm.expect(pm.response.text()).to.include('swagger-ui');",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Swagger spec /docs/doc.json",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/docs/doc.json",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "docs",
+                "doc.json"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    const spec = pm.response.json();",
+                  "    pm.test('generated by swag, documents the API', () => {",
+                  "        pm.response.to.have.status(200);",
+                  "        pm.expect(spec.swagger).to.eql('2.0');",
+                  "        pm.expect(spec.paths).to.have.property('/v1/companies/{id}');",
+                  "        pm.expect(spec.securityDefinitions).to.have.property('BearerAuth');",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Metrics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/metrics",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "metrics"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('Prometheus metrics are exposed', () => {",
+                  "        pm.response.to.have.status(200);",
+                  "        const text = pm.response.text();",
+                  "        pm.expect(text).to.include('companies_http_request_duration_seconds');",
+                  "        pm.expect(text).to.include('companies_events_published_total');",
+                  "        pm.expect(text).to.include('companies_events_dead_lettered_total');",
+                  "        pm.expect(text).to.include('companies_health_check_status');",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1. Company lifecycle",
+      "description": "The full happy path, in order: create, get, patch, a patch that changes nothing, delete, then a 404. Run this folder with the Collection Runner; each step uses ids saved by the previous one.",
+      "item": [
+        {
+          "name": "Create company",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/companies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "companies"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{companyName}}\",\n  \"description\": \"Created from Postman\",\n  \"amount_of_employees\": 42,\n  \"registered\": true,\n  \"type\": \"CORPORATIONS\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    // A fresh name within the 15 character limit.",
+                  "    pm.collectionVariables.set('companyName', 'PM-' + Math.random().toString(36).slice(2, 9));",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    const expectCompany = (c) => {",
+                  "        pm.expect(c.id).to.match(/^[0-9a-f-]{36}$/);",
+                  "        pm.expect(c).to.have.all.keys('id', 'name', 'description', 'amount_of_employees', 'registered', 'type', 'created_at', 'updated_at');",
+                  "    };",
+                  "",
+                  "    pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "    const c = pm.response.json();",
+                  "    pm.test('body is the stored company', () => {",
+                  "        expectCompany(c);",
+                  "        pm.expect(c.name).to.eql(pm.collectionVariables.get('companyName'));",
+                  "        pm.expect(c.amount_of_employees).to.eql(42);",
+                  "        pm.expect(c.created_at).to.eql(c.updated_at);",
+                  "    });",
+                  "    pm.test('Location points at the company', () => pm.expect(pm.response.headers.get('Location')).to.eql('/v1/companies/' + c.id));",
+                  "    pm.collectionVariables.set('companyId', c.id);",
+                  "    pm.collectionVariables.set('createdAt', c.created_at);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get company (public, no token)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/companies/{{companyId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "companies",
+                "{{companyId}}"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    const expectCompany = (c) => {",
+                  "        pm.expect(c.id).to.match(/^[0-9a-f-]{36}$/);",
+                  "        pm.expect(c).to.have.all.keys('id', 'name', 'description', 'amount_of_employees', 'registered', 'type', 'created_at', 'updated_at');",
+                  "    };",
+                  "",
+                  "    pm.test('200 OK without authentication', () => pm.response.to.have.status(200));",
+                  "    pm.test('same company', () => {",
+                  "        const c = pm.response.json();",
+                  "        expectCompany(c);",
+                  "        pm.expect(c.id).to.eql(pm.collectionVariables.get('companyId'));",
+                  "        pm.expect(c.description).to.eql('Created from Postman');",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Patch company (merge patch)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/merge-patch+json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/companies/{{companyId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "companies",
+                "{{companyId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": null,\n  \"amount_of_employees\": 50,\n  \"type\": \"SOLE_PROPRIETORSHIP\"\n}"
+            },
+            "description": "JSON Merge Patch: only sent members change; `null` clears the description."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "    const c = pm.response.json();",
+                  "    pm.test('changes applied, others kept', () => {",
+                  "        pm.expect(c.description).to.be.null;",
+                  "        pm.expect(c.amount_of_employees).to.eql(50);",
+                  "        pm.expect(c.type).to.eql('SOLE_PROPRIETORSHIP');",
+                  "        pm.expect(c.name).to.eql(pm.collectionVariables.get('companyName'));",
+                  "        pm.expect(c.registered).to.eql(true);",
+                  "    });",
+                  "    pm.test('updated_at moved, created_at did not', () => {",
+                  "        pm.expect(c.created_at).to.eql(pm.collectionVariables.get('createdAt'));",
+                  "        pm.expect(c.updated_at).to.not.eql(c.created_at);",
+                  "    });",
+                  "    pm.collectionVariables.set('updatedAt', c.updated_at);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Patch with no changes (no event)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/companies/{{companyId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "companies",
+                "{{companyId}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{ \"amount_of_employees\": 50 }"
+            },
+            "description": "Nothing changes, so nothing is written and no event is published."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "    pm.test('updated_at unchanged', () => pm.expect(pm.response.json().updated_at).to.eql(pm.collectionVariables.get('updatedAt')));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete company",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/companies/{{companyId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "companies",
+                "{{companyId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('204 No Content', () => pm.response.to.have.status(204));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get deleted company",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/companies/{{companyId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "companies",
+                "{{companyId}}"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('status 404', () => pm.response.to.have.status(404));",
+                  "    pm.test('error code is not_found', () => pm.expect(pm.response.json().error.code).to.eql('not_found'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete again",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/companies/{{companyId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "companies",
+                "{{companyId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('status 404', () => pm.response.to.have.status(404));",
+                  "    pm.test('error code is not_found', () => pm.expect(pm.response.json().error.code).to.eql('not_found'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Validation",
+      "description": "Every rejected request returns 400 with the offending fields. None of them reaches the service.",
+      "item": [
+        {
+          "name": "Name longer than 15 characters",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/companies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "companies"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Sixteen chars!!!\",\n  \"amount_of_employees\": 1,\n  \"registered\": true,\n  \"type\": \"COOPERATIVE\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    // A fresh name within the 15 character limit.",
+                  "    pm.collectionVariables.set('companyName', 'PM-' + Math.random().toString(36).slice(2, 9));",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "    pm.test('error code is validation_failed', () => pm.expect(pm.response.json().error.code).to.eql('validation_failed'));",
+                  "    pm.test('field \"name\" is reported', () => pm.expect(pm.response.json().error.fields).to.have.property('name'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Missing required fields",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/companies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "companies"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"description\": \"only a description\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "    pm.test('error code is validation_failed', () => pm.expect(pm.response.json().error.code).to.eql('validation_failed'));",
+                  "    pm.test('field \"name\" is reported', () => pm.expect(pm.response.json().error.fields).to.have.property('name'));",
+                  "    pm.test('field \"amount_of_employees\" is reported', () => pm.expect(pm.response.json().error.fields).to.have.property('amount_of_employees'));",
+                  "    pm.test('field \"registered\" is reported', () => pm.expect(pm.response.json().error.fields).to.have.property('registered'));",
+                  "    pm.test('field \"type\" is reported', () => pm.expect(pm.response.json().error.fields).to.have.property('type'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Unknown type",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/companies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "companies"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{companyName}}\",\n  \"amount_of_employees\": 1,\n  \"registered\": true,\n  \"type\": \"LLC\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    // A fresh name within the 15 character limit.",
+                  "    pm.collectionVariables.set('companyName', 'PM-' + Math.random().toString(36).slice(2, 9));",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "    pm.test('error code is validation_failed', () => pm.expect(pm.response.json().error.code).to.eql('validation_failed'));",
+                  "    pm.test('field \"type\" is reported', () => pm.expect(pm.response.json().error.fields).to.have.property('type'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Negative employees",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/companies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "companies"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{companyName}}\",\n  \"amount_of_employees\": -1,\n  \"registered\": true,\n  \"type\": \"COOPERATIVE\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    // A fresh name within the 15 character limit.",
+                  "    pm.collectionVariables.set('companyName', 'PM-' + Math.random().toString(36).slice(2, 9));",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "    pm.test('error code is validation_failed', () => pm.expect(pm.response.json().error.code).to.eql('validation_failed'));",
+                  "    pm.test('field \"amount_of_employees\" is reported', () => pm.expect(pm.response.json().error.fields).to.have.property('amount_of_employees'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Wrong JSON type",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/companies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "companies"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{companyName}}\",\n  \"amount_of_employees\": \"lots\",\n  \"registered\": true,\n  \"type\": \"COOPERATIVE\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    // A fresh name within the 15 character limit.",
+                  "    pm.collectionVariables.set('companyName', 'PM-' + Math.random().toString(36).slice(2, 9));",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "    pm.test('error code is validation_failed', () => pm.expect(pm.response.json().error.code).to.eql('validation_failed'));",
+                  "    pm.test('field \"amount_of_employees\" is reported', () => pm.expect(pm.response.json().error.fields).to.have.property('amount_of_employees'));",
+                  "",
+                  "    pm.test('message names the expected type', () => pm.expect(pm.response.json().error.fields.amount_of_employees).to.eql('must be a JSON integer'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Description over 3000 characters",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/companies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "companies"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{companyName}}\",\n  \"amount_of_employees\": 1,\n  \"registered\": true,\n  \"type\": \"COOPERATIVE\",\n  \"description\": \"{{longDescription}}\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    // A fresh name within the 15 character limit.",
+                  "    pm.collectionVariables.set('companyName', 'PM-' + Math.random().toString(36).slice(2, 9));",
+                  "    pm.collectionVariables.set('longDescription', 'x'.repeat(3001));",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "    pm.test('error code is validation_failed', () => pm.expect(pm.response.json().error.code).to.eql('validation_failed'));",
+                  "    pm.test('field \"description\" is reported', () => pm.expect(pm.response.json().error.fields).to.have.property('description'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Client-supplied id is rejected",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/companies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "companies"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{companyName}}\",\n  \"amount_of_employees\": 1,\n  \"registered\": true,\n  \"type\": \"COOPERATIVE\",\n  \"id\": \"8b0e7c2c-6b7a-4c39-9a3e-6c1d8a1b2c3d\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    // A fresh name within the 15 character limit.",
+                  "    pm.collectionVariables.set('companyName', 'PM-' + Math.random().toString(36).slice(2, 9));",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "    pm.test('error code is validation_failed', () => pm.expect(pm.response.json().error.code).to.eql('validation_failed'));",
+                  "    pm.test('field \"id\" is reported', () => pm.expect(pm.response.json().error.fields).to.have.property('id'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Malformed JSON",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/companies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "companies"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\"name\": "
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "    pm.test('error code is bad_request', () => pm.expect(pm.response.json().error.code).to.eql('bad_request'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Wrong Content-Type",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "text/plain"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/companies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "companies"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "name=Acme"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('status 415', () => pm.response.to.have.status(415));",
+                  "    pm.test('error code is unsupported_media_type', () => pm.expect(pm.response.json().error.code).to.eql('unsupported_media_type'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "PATCH: null for a required field",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/companies/{{$randomUUID}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "companies",
+                "{{$randomUUID}}"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": null\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "    pm.test('error code is validation_failed', () => pm.expect(pm.response.json().error.code).to.eql('validation_failed'));",
+                  "    pm.test('field \"name\" is reported', () => pm.expect(pm.response.json().error.fields).to.have.property('name'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Invalid id in path",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/companies/not-a-uuid",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "companies",
+                "not-a-uuid"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('status 400', () => pm.response.to.have.status(400));",
+                  "    pm.test('error code is validation_failed', () => pm.expect(pm.response.json().error.code).to.eql('validation_failed'));",
+                  "    pm.test('field \"id\" is reported', () => pm.expect(pm.response.json().error.fields).to.have.property('id'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3. Authentication",
+      "description": "Reads are public; create, patch and delete need a valid HS256 bearer token.",
+      "item": [
+        {
+          "name": "Create without token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/companies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "companies"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{companyName}}\",\n  \"amount_of_employees\": 1,\n  \"registered\": true,\n  \"type\": \"COOPERATIVE\"\n}"
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    // A fresh name within the 15 character limit.",
+                  "    pm.collectionVariables.set('companyName', 'PM-' + Math.random().toString(36).slice(2, 9));",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('status 401', () => pm.response.to.have.status(401));",
+                  "    pm.test('error code is unauthorized', () => pm.expect(pm.response.json().error.code).to.eql('unauthorized'));",
+                  "",
+                  "    pm.test('WWW-Authenticate challenge', () => pm.expect(pm.response.headers.get('WWW-Authenticate')).to.include('Bearer'));",
+                  "    pm.test('explains what is missing', () => pm.expect(pm.response.json().error.message).to.eql('missing bearer token'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create with forged token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/companies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "companies"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{companyName}}\",\n  \"amount_of_employees\": 1,\n  \"registered\": true,\n  \"type\": \"COOPERATIVE\"\n}"
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{forgedToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    // A fresh name within the 15 character limit.",
+                  "    pm.collectionVariables.set('companyName', 'PM-' + Math.random().toString(36).slice(2, 9));",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('status 401', () => pm.response.to.have.status(401));",
+                  "    pm.test('error code is unauthorized', () => pm.expect(pm.response.json().error.code).to.eql('unauthorized'));",
+                  "",
+                  "    pm.test('token is rejected', () => pm.expect(pm.response.json().error.message).to.eql('invalid or expired token'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Delete with expired token",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/companies/{{$randomUUID}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "companies",
+                "{{$randomUUID}}"
+              ]
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{expiredToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('status 401', () => pm.response.to.have.status(401));",
+                  "    pm.test('error code is unauthorized', () => pm.expect(pm.response.json().error.code).to.eql('unauthorized'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Read without token is allowed",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/companies/{{$randomUUID}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "companies",
+                "{{$randomUUID}}"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('status 404', () => pm.response.to.have.status(404));",
+                  "    pm.test('error code is not_found', () => pm.expect(pm.response.json().error.code).to.eql('not_found'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4. Uniqueness",
+      "description": "Names are unique regardless of letter case.",
+      "item": [
+        {
+          "name": "Create original",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/companies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "companies"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{companyName}}\",\n  \"amount_of_employees\": 1,\n  \"registered\": true,\n  \"type\": \"COOPERATIVE\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    // A fresh name within the 15 character limit.",
+                  "    pm.collectionVariables.set('companyName', 'PM-' + Math.random().toString(36).slice(2, 9));",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "    pm.collectionVariables.set('conflictId', pm.response.json().id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Same name in another case (409)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/companies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "companies"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{upperName}}\",\n  \"amount_of_employees\": 1,\n  \"registered\": true,\n  \"type\": \"COOPERATIVE\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.collectionVariables.set('upperName', pm.collectionVariables.get('companyName').toUpperCase());",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('status 409', () => pm.response.to.have.status(409));",
+                  "    pm.test('error code is conflict', () => pm.expect(pm.response.json().error.code).to.eql('conflict'));",
+                  "    pm.test('field \"name\" is reported', () => pm.expect(pm.response.json().error.fields).to.have.property('name'));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Rename another company to a taken name (409)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/companies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "companies"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{otherName}}\",\n  \"amount_of_employees\": 1,\n  \"registered\": true,\n  \"type\": \"COOPERATIVE\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.collectionVariables.set('otherName', 'PM-' + Math.random().toString(36).slice(2, 9));",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('second company created', () => pm.response.to.have.status(201));",
+                  "    const otherId = pm.response.json().id;",
+                  "    const base = pm.variables.replaceIn('{{baseUrl}}');",
+                  "    pm.sendRequest({",
+                  "        url: base + '/v1/companies/' + otherId,",
+                  "        method: 'PATCH',",
+                  "        header: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + pm.collectionVariables.get('token') },",
+                  "        body: { mode: 'raw', raw: JSON.stringify({ name: pm.collectionVariables.get('companyName') }) },",
+                  "    }, (err, res) => {",
+                  "        pm.test('rename is rejected with 409', () => { pm.expect(err).to.be.null; pm.expect(res.code).to.eql(409); });",
+                  "        pm.sendRequest({ url: base + '/v1/companies/' + otherId, method: 'DELETE',",
+                  "            header: { Authorization: 'Bearer ' + pm.collectionVariables.get('token') } }, () => {});",
+                  "    });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Clean up",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/v1/companies/{{conflictId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "companies",
+                "{{conflictId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('204', () => pm.response.to.have.status(204));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "5. Observability",
+      "description": "Sends a request with its own W3C traceparent and X-Request-ID. Open the Visualize tab of the response for links to the trace in Tempo, its logs in Loki, the dashboard and the decoded event in Redpanda Console.",
+      "item": [
+        {
+          "name": "Create with trace context",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "traceparent",
+                "value": "00-{{traceId}}-00f067aa0ba902b7-01"
+              },
+              {
+                "key": "X-Request-ID",
+                "value": "{{requestId}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/companies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "companies"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{companyName}}\",\n  \"description\": \"Follow me in Grafana\",\n  \"amount_of_employees\": 7,\n  \"registered\": false,\n  \"type\": \"NON_PROFIT\"\n}"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    // Start the trace ourselves so we know its id and can link to it.",
+                  "    const hex = (n) => Array.from({ length: n }, () => Math.floor(Math.random() * 16).toString(16)).join('');",
+                  "    pm.collectionVariables.set('traceId', hex(32));",
+                  "    pm.collectionVariables.set('requestId', 'postman-' + hex(8));",
+                  "",
+                  "    // A fresh name within the 15 character limit.",
+                  "    pm.collectionVariables.set('companyName', 'PM-' + Math.random().toString(36).slice(2, 9));",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "    pm.test('request id is echoed', () => pm.expect(pm.response.headers.get('X-Request-ID')).to.eql(pm.collectionVariables.get('requestId')));",
+                  "    pm.collectionVariables.set('observedCompanyId', pm.response.json().id);",
+                  "",
+                  "    // Links for the Visualize tab. The trace needs a few seconds to reach Tempo.",
+                  "    const traceId = pm.collectionVariables.get('traceId');",
+                  "    const grafana = pm.environment.get('grafanaUrl') || 'http://localhost:3000';",
+                  "    const console_ = pm.environment.get('consoleUrl') || 'http://localhost:8081';",
+                  "    const pgadmin = pm.environment.get('pgadminUrl') || 'http://localhost:5050';",
+                  "    const explore = (pane) => grafana + '/explore?schemaVersion=1&orgId=1&panes=' + encodeURIComponent(JSON.stringify({ a: pane }));",
+                  "    const range = { from: 'now-1h', to: 'now' };",
+                  "    const links = [",
+                  "        ['Trace in Tempo (HTTP, service, SQL and Kafka spans)', explore({ datasource: 'tempo', range,",
+                  "            queries: [{ refId: 'A', datasource: { type: 'tempo', uid: 'tempo' }, queryType: 'traceql', query: traceId }] })],",
+                  "        ['Logs of this request in Loki', explore({ datasource: 'loki', range,",
+                  "            queries: [{ refId: 'A', datasource: { type: 'loki', uid: 'loki' }, expr: '{service_name=\"companies-service\"} | trace_id=\"' + traceId + '\"' }] })],",
+                  "        ['Service dashboard (metrics, service graph, DLQ)', grafana + '/d/companies-service/companies-service'],",
+                  "        ['Event in Redpanda Console (protobuf decoded; key = company id)', console_ + '/topics/companies.events.v1'],",
+                  "        ['Row in pgAdmin', pgadmin + '/browser/'],",
+                  "    ];",
+                  "    console.log('trace id:', traceId);",
+                  "    links.forEach(([title, url]) => console.log(title + ': ' + url));",
+                  "    pm.visualizer.set(`",
+                  "    <h3>Follow request {{requestId}}</h3>",
+                  "    <p>trace id <code>{{traceId}}</code>, company <code>{{companyId}}</code></p>",
+                  "    <ul>{{#each links}}<li><a href=\"{{this.[1]}}\" target=\"_blank\">{{this.[0]}}</a></li>{{/each}}</ul>",
+                  "    <p><small>Spans are exported every second; open the trace link after a few seconds.</small></p>",
+                  "    `, { requestId: pm.collectionVariables.get('requestId'), traceId, companyId: pm.response.json().id, links });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Clean up",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "traceparent",
+                "value": "00-{{traceId}}-00f067aa0ba902b8-01"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/companies/{{observedCompanyId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "companies",
+                "{{observedCompanyId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "{",
+                  "    pm.test('204', () => pm.response.to.have.status(204));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

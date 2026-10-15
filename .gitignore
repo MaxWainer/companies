@@ -1,0 +1,7 @@
+/bin/
+/coverage.*
+.env
+postman/local.postman_environment.json
+.idea/
+.vscode/
+.DS_Store

@@ -1,0 +1,70 @@
+# Single-binary Tempo for local use: local block storage, OTLP ingest and a
+# metrics generator that feeds span metrics / service graphs to Prometheus.
+stream_over_http_enabled: true
+
+server:
+  http_listen_port: 3200
+  log_level: warn
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+ingester:
+  max_block_duration: 5m
+
+compactor:
+  compaction:
+    block_retention: 24h
+
+metrics_generator:
+  processor:
+    service_graphs:
+      # An uninstrumented peer becomes a virtual node named by the first of
+      # these attributes on the client span. PostgreSQL shows up this way;
+      # Kafka does not, because the producer spans have no paired consumer.
+      peer_attributes: [peer.service, db.system, db.name]
+      enable_virtual_node_label: true
+    span_metrics:
+      dimensions: [http.route, http.response.status_code, messaging.destination.name]
+      enable_target_info: true
+    local_blocks:
+      # Keeps recent spans queryable for TraceQL metrics (Grafana Traces Drilldown).
+      filter_server_spans: false
+      flush_to_storage: true
+  registry:
+    external_labels:
+      source: tempo
+  storage:
+    path: /var/tempo/generator/wal
+    remote_write:
+      - url: http://prometheus:9090/api/v1/write
+        send_exemplars: true
+  traces_storage:
+    path: /var/tempo/generator/traces
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /var/tempo/wal
+    local:
+      path: /var/tempo/blocks
+
+overrides:
+  defaults:
+    metrics_generator:
+      processors: [service-graphs, span-metrics, local-blocks]
+      # Per-tenant settings take precedence over metrics_generator.processor
+      # above, so the service-graph peers must be configured here as well.
+      processor:
+        service_graphs:
+          peer_attributes: [peer.service, db.system, db.name]
+          enable_virtual_node_label: true
+        span_metrics:
+          dimensions: [http.route, http.response.status_code, messaging.destination.name]

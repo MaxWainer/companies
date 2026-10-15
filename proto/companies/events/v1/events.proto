@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package companies.events.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "example.com/companies/internal/event/eventpb;eventpb";
+
+message CompanyEvent {
+  string id = 1;
+  EventType type = 2;
+  google.protobuf.Timestamp occurred_at = 3;
+  string actor = 4;
+  repeated string changed_fields = 5;
+  Company company = 6;
+}
+
+enum EventType {
+  EVENT_TYPE_UNSPECIFIED = 0;
+  EVENT_TYPE_COMPANY_CREATED = 1;
+  EVENT_TYPE_COMPANY_UPDATED = 2;
+  EVENT_TYPE_COMPANY_DELETED = 3;
+}
+
+message Company {
+  string id = 1;
+  string name = 2;
+  optional string description = 3;
+  int32 amount_of_employees = 4;
+  bool registered = 5;
+  CompanyType type = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+enum CompanyType {
+  COMPANY_TYPE_UNSPECIFIED = 0;
+  COMPANY_TYPE_CORPORATIONS = 1;
+  COMPANY_TYPE_NON_PROFIT = 2;
+  COMPANY_TYPE_COOPERATIVE = 3;
+  COMPANY_TYPE_SOLE_PROPRIETORSHIP = 4;
+}

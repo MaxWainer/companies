@@ -1,0 +1,241 @@
+# Local environment: the service, its dependencies, an observability stack and
+# developer tools.
+#
+#   make start      # recommended: picks free ports, waits, prints every link
+#   docker compose up -d --build
+#
+#   API         http://localhost:8080
+#   Grafana     http://localhost:3000   (anonymous admin; dashboards + Explore)
+#   Prometheus  http://localhost:9090
+#   Console     http://localhost:8081   (Redpanda Console; decodes the protobuf events)
+#   pgAdmin     http://localhost:5050   (no login; server "companies" preconfigured)
+#
+# Postgres (5432), Redpanda's Kafka API (19092) and the OTLP endpoint (4318) are published too,
+# so the service can also run on the host with `make run`.
+#
+# Every port is published on 127.0.0.1 only: Grafana, pgAdmin and the Console
+# have no login, so they must not be reachable from the network.
+# BIND_ADDRESS=0.0.0.0 opts out (e.g. a remote dev VM behind a firewall).
+#
+# Host ports are overridable when they clash with something already running,
+# e.g. API_PORT=18080 GRAFANA_PORT=13000 POSTGRES_PORT=15432 docker compose up -d
+# (Redpanda's advertised external listener follows REDPANDA_PORT.)
+
+name: companies
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  api:
+    <<: *restart
+    build:
+      context: .
+      args:
+        VERSION: local
+    image: companies-service:local
+    cpus: ${API_CPUS:-2}
+    # Settings come from .env.example; the overrides below point the service
+    # at the other containers. Add more overrides here as needed.
+    env_file:
+      - .env.example
+    environment:
+      COMPANIES_DATABASE_DSN: postgres://companies:companies@postgres:5432/companies?sslmode=disable
+      COMPANIES_KAFKA_BROKERS: redpanda:9092
+      COMPANIES_LOG_FORMAT: json
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_RESOURCE_ATTRIBUTES: deployment.environment.name=docker-compose
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${API_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    # Readiness (/readyz): healthy once PostgreSQL is reachable and the first
+    # round of checks has run. The image is distroless, so the binary probes
+    # itself. Kubernetes would use /startupz, /livez and /readyz separately
+    # (see deploy/kubernetes).
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/companies", "healthcheck", "ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  postgres:
+    <<: *restart
+    image: postgres:18.6-alpine
+    environment:
+      POSTGRES_USER: companies
+      POSTGRES_PASSWORD: companies
+      POSTGRES_DB: companies
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U companies -d companies"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redpanda:
+    <<: *restart
+    image: docker.redpanda.com/redpandadata/redpanda:v26.2.4
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --memory=512M
+      - --default-log-level=warn
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:${REDPANDA_PORT:-19092}
+      - --schema-registry-addr=internal://0.0.0.0:8081
+      - --rpc-addr=redpanda:33145
+      - --advertise-rpc-addr=redpanda:33145
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${REDPANDA_PORT:-19092}:19092"
+    volumes:
+      - redpanda-data:/var/lib/redpanda/data
+      - ./deploy/redpanda-bootstrap.yaml:/etc/redpanda/.bootstrap.yaml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true'"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 10s
+
+  # --- developer tools --------------------------------------------------------
+
+  redpanda-console:
+    <<: *restart
+    image: docker.redpanda.com/redpandadata/console:v3.12.0
+    environment:
+      CONFIG_FILEPATH: /etc/console/config.yaml
+    volumes:
+      - ./deploy/redpanda-console.yaml:/etc/console/config.yaml:ro
+      - ./proto:/etc/protos:ro
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${CONSOLE_PORT:-8081}:8080"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+
+  pgadmin:
+    <<: *restart
+    image: dpage/pgadmin4:9.18
+    # Desktop mode: no login screen and no master password. The server list is
+    # imported from servers.json on start; libpq requires the password file to
+    # be owned by the pgadmin user with mode 0600, so it is copied into place.
+    entrypoint: ["/bin/sh", "-c", "cp /pgadmin-config/pgpass /tmp/pgpass && chmod 600 /tmp/pgpass && exec /entrypoint.sh"]
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+      PGADMIN_CONFIG_UPGRADE_CHECK_ENABLED: "False"
+      PGADMIN_SERVER_JSON_FILE: /pgadmin-config/servers.json
+    volumes:
+      - ./deploy/pgadmin:/pgadmin-config:ro
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${PGADMIN_PORT:-5050}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:80/misc/ping | grep -q PING"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # --- observability ----------------------------------------------------------
+  # The collector, Tempo and Loki images have no shell, so they cannot run a
+  # Docker healthcheck; `make start` waits on their readiness endpoints.
+
+  otel-collector:
+    <<: *restart
+    image: otel/opentelemetry-collector-contrib:0.162.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./deploy/otel-collector.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${OTLP_GRPC_PORT:-4317}:4317"
+      - "${BIND_ADDRESS:-127.0.0.1}:${OTLP_HTTP_PORT:-4318}:4318"
+    depends_on:
+      - tempo
+      - loki
+
+  tempo:
+    <<: *restart
+    image: grafana/tempo:2.10.8
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./deploy/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${TEMPO_PORT:-3200}:3200"
+
+  loki:
+    <<: *restart
+    image: grafana/loki:3.7.8
+    command: ["-config.file=/etc/loki/config.yaml"]
+    volumes:
+      - ./deploy/loki.yaml:/etc/loki/config.yaml:ro
+      - loki-data:/loki
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${LOKI_PORT:-3100}:3100"
+
+  prometheus:
+    <<: *restart
+    image: prom/prometheus:v3.15.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-remote-write-receiver
+      - --enable-feature=exemplar-storage
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${PROMETHEUS_PORT:-9090}:9090"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  grafana:
+    <<: *restart
+    image: grafana/grafana:13.2.4
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_FEATURE_TOGGLES_ENABLE: traceqlEditor
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${GRAFANA_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    depends_on:
+      - prometheus
+      - tempo
+      - loki
+
+volumes:
+  postgres-data:
+  redpanda-data:
+  tempo-data:
+  loki-data:
+  prometheus-data:
